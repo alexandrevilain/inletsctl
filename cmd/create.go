@@ -278,12 +278,14 @@ func createHost(provider, name, region, zone, projectID, userData, inletsPort st
 		}, nil
 	} else if provider == "aws" {
 		return &provision.BasicHost{
-			Name:       name,
-			OS:         "ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64*",
-			Plan:       "t2.micro",
-			Region:     region,
-			UserData:   userData,
-			Additional: map[string]string{},
+			Name:     name,
+			OS:       "ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64*",
+			Plan:     "t2.micro",
+			Region:   region,
+			UserData: userData,
+			Additional: map[string]string{
+				"inlets-port": inletsPort,
+			},
 		}, nil
 	}
 

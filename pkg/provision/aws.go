@@ -2,7 +2,9 @@ package provision
 
 import (
 	"encoding/base64"
+	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -48,12 +50,28 @@ func (p *AWSProvisioner) Provision(host BasicHost) (*ProvisionedHost, error) {
 		return nil, err
 	}
 
+	inletsPort, err := strconv.ParseInt(host.Additional["inlets-port"], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	vpcID, err := p.getOrCreateDefaultVPC()
+	if err != nil {
+		return nil, err
+	}
+
+	securityGroupID, err := p.createSecurityGroup(vpcID, host.Name, inletsPort)
+	if err != nil {
+		return nil, err
+	}
+
 	runResult, err := p.client.RunInstances(&ec2.RunInstancesInput{
-		ImageId:      aws.String(ami),
-		InstanceType: aws.String(host.Plan),
-		MinCount:     aws.Int64(1),
-		MaxCount:     aws.Int64(1),
-		UserData:     aws.String(base64.StdEncoding.EncodeToString([]byte(host.UserData))),
+		ImageId:          aws.String(ami),
+		InstanceType:     aws.String(host.Plan),
+		MinCount:         aws.Int64(1),
+		MaxCount:         aws.Int64(1),
+		UserData:         aws.String(base64.StdEncoding.EncodeToString([]byte(host.UserData))),
+		SecurityGroupIds: []*string{aws.String(securityGroupID)},
 		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
 			{
 				DeviceName: aws.String("/dev/sdh"),
@@ -84,13 +102,11 @@ func (p *AWSProvisioner) Provision(host BasicHost) (*ProvisionedHost, error) {
 
 // Status returns the status of the aws instance
 func (p *AWSProvisioner) Status(id string) (*ProvisionedHost, error) {
-	input := &ec2.DescribeInstancesInput{
+	describeResult, err := p.client.DescribeInstances(&ec2.DescribeInstancesInput{
 		InstanceIds: []*string{
 			aws.String(id),
 		},
-	}
-
-	describeResult, err := p.client.DescribeInstances(input)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -102,13 +118,10 @@ func (p *AWSProvisioner) Status(id string) (*ProvisionedHost, error) {
 
 // Delete deletes the provisionned instance by ID
 func (p *AWSProvisioner) Delete(id string) error {
-	input := &ec2.TerminateInstancesInput{
-		InstanceIds: []*string{
-			aws.String(id),
-		},
-	}
+	_, err := p.client.TerminateInstances(&ec2.TerminateInstancesInput{
+		InstanceIds: []*string{aws.String(id)},
+	})
 
-	_, err := p.client.TerminateInstances(input)
 	return err
 }
 
@@ -157,6 +170,67 @@ func (p *AWSProvisioner) findAMI(name string) (string, error) {
 	})
 
 	return images[0].ID, nil
+}
+
+func (p *AWSProvisioner) getOrCreateDefaultVPC() (string, error) {
+	describeResult, err := p.client.DescribeVpcs(&ec2.DescribeVpcsInput{})
+	if err != nil {
+		return "", err
+	}
+
+	for _, vpc := range describeResult.Vpcs {
+		if *vpc.IsDefault {
+			return *vpc.VpcId, nil
+		}
+	}
+
+	// If the default VPC doesn't exists, create it:
+	createResult, err := p.client.CreateDefaultVpc(&ec2.CreateDefaultVpcInput{})
+	if err != nil {
+		return "", err
+	}
+
+	return *createResult.Vpc.VpcId, nil
+}
+
+func (p *AWSProvisioner) createSecurityGroup(vpcID, hostname string, inletsPort int64) (string, error) {
+	securityGroupResult, err := p.client.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+		Description: aws.String("Inlets security group"),
+		GroupName:   aws.String(fmt.Sprintf("inlets-sg-%v", hostname)),
+		VpcId:       aws.String(vpcID),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	_, err = p.client.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: securityGroupResult.GroupId,
+		IpPermissions: []*ec2.IpPermission{
+			(&ec2.IpPermission{}).
+				SetIpProtocol("tcp").
+				SetFromPort(80).
+				SetToPort(80).
+				SetIpRanges([]*ec2.IpRange{
+					{CidrIp: aws.String("0.0.0.0/0")},
+				}),
+			(&ec2.IpPermission{}).
+				SetIpProtocol("tcp").
+				SetFromPort(443).
+				SetToPort(443).
+				SetIpRanges([]*ec2.IpRange{
+					{CidrIp: aws.String("0.0.0.0/0")},
+				}),
+			(&ec2.IpPermission{}).
+				SetIpProtocol("tcp").
+				SetFromPort(inletsPort).
+				SetToPort(inletsPort).
+				SetIpRanges([]*ec2.IpRange{
+					(&ec2.IpRange{}).
+						SetCidrIp("0.0.0.0/0"),
+				}),
+		},
+	})
+	return *securityGroupResult.GroupId, err
 }
 
 func reservationToPrivionedHost(reservation *ec2.Reservation) *ProvisionedHost {
