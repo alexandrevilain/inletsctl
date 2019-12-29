@@ -29,8 +29,8 @@ func init() {
 	createCmd.Flags().StringP("access-token", "a", "", "The access token for your cloud")
 	createCmd.Flags().StringP("access-token-file", "f", "", "Read this file for the access token for your cloud")
 
-	createCmd.Flags().String("secret-key", "", "The access token for your cloud (Scaleway)")
-	createCmd.Flags().String("secret-key-file", "", "Read this file for the access token for your cloud (Scaleway)")
+	createCmd.Flags().String("secret-key", "", "The access token for your cloud (Scaleway or AWS)")
+	createCmd.Flags().String("secret-key-file", "", "Read this file for the access token for your cloud (Scaleway or AWS)")
 	createCmd.Flags().String("organisation-id", "", "Organisation ID (Scaleway)")
 	createCmd.Flags().String("project-id", "", "Project ID (Packet.com, Google Compute Engine)")
 
@@ -84,6 +84,11 @@ func runCreate(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	secretKey, err := getFileOrString(cmd.Flags(), "secret-key-file", "secret-key", true)
+	if err != nil {
+		return err
+	}
+
 	var region string
 	if cmd.Flags().Changed("region") {
 		if regionVal, err := cmd.Flags().GetString("region"); len(regionVal) > 0 {
@@ -104,16 +109,8 @@ func runCreate(cmd *cobra.Command, _ []string) error {
 		zone, err = cmd.Flags().GetString("zone")
 	}
 
-	var secretKey string
 	var organisationID string
 	if provider == "scaleway" {
-
-		var secretKeyErr error
-		secretKey, secretKeyErr = getFileOrString(cmd.Flags(), "secret-key-file", "secret-key", true)
-		if secretKeyErr != nil {
-			return secretKeyErr
-		}
-
 		organisationID, _ = cmd.Flags().GetString("organisation-id")
 		if len(organisationID) == 0 {
 			return fmt.Errorf("--organisation-id cannot be empty")
@@ -215,6 +212,8 @@ func getProvisioner(provider, accessToken, secretKey, organisationID, region str
 		return provision.NewScalewayProvisioner(accessToken, secretKey, organisationID, region)
 	} else if provider == "gce" {
 		return provision.NewGCEProvisioner(accessToken)
+	} else if provider == "aws" {
+		return provision.NewAWSProvisioner(accessToken, secretKey, region)
 	}
 	return nil, fmt.Errorf("no provisioner for provider: %s", provider)
 }
@@ -276,6 +275,15 @@ func createHost(provider, name, region, zone, projectID, userData, inletsPort st
 				"firewall-name": "inlets",
 				"firewall-port": inletsPort,
 			},
+		}, nil
+	} else if provider == "aws" {
+		return &provision.BasicHost{
+			Name:       name,
+			OS:         "ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64*",
+			Plan:       "t2.micro",
+			Region:     region,
+			UserData:   userData,
+			Additional: map[string]string{},
 		}, nil
 	}
 

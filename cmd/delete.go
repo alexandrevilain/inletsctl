@@ -13,6 +13,7 @@ import (
 func init() {
 	inletsCmd.AddCommand(deleteCmd)
 	deleteCmd.Flags().StringP("provider", "p", "digitalocean", "The cloud provider - digitalocean, gce, packet, scaleway, or civo")
+	deleteCmd.Flags().StringP("region", "r", "lon1", "The region for your cloud provider")
 
 	deleteCmd.Flags().StringP("inlets-token", "t", "", "The inlets auth token for your exit node")
 	deleteCmd.Flags().StringP("access-token", "a", "", "The access token for your cloud")
@@ -76,15 +77,13 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	var secretKey string
+	secretKey, err := getFileOrString(cmd.Flags(), "secret-key-file", "secret-key", true)
+	if err != nil {
+		return err
+	}
+
 	var organisationID string
 	if provider == "scaleway" {
-		var secretKeyErr error
-		secretKey, secretKeyErr = getFileOrString(cmd.Flags(), "secret-key-file", "secret-key", true)
-		if secretKeyErr != nil {
-			return secretKeyErr
-		}
-
 		organisationID, _ = cmd.Flags().GetString("organisation-id")
 		if len(organisationID) == 0 {
 			return fmt.Errorf("--organisation-id cannot be empty")
